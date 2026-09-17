@@ -1,9 +1,13 @@
-import Gemma from './build/gemma_cpp_js.mjs';
+import Gemma from "./build/gemma_cpp_js.mjs";
 import { BenchmarkConnector } from "speedometer-utils/benchmark.mjs";
 import { createSubIteratedSuite } from "speedometer-utils/helpers.mjs";
 import { params } from "speedometer-utils/params.mjs";
+import {
+  LLM_BENCHMARK_PROMPT,
+  LLM_MAX_OUTPUT_TOKENS,
+} from "../llm-benchmark-config.mjs";
 
-const weightsPath = '../models/gemma/270m-sfp-it.sbs';
+const weightsPath = "../models/gemma/270m-sfp-it.sbs";
 
 let lastPercent = -1;
 function logDownloadProgress(progress) {
@@ -15,8 +19,13 @@ function logDownloadProgress(progress) {
     }
   } else {
     // Log every 10 MB if total length is unknown
-    if (Math.floor(progress.loaded / 10485760) !== Math.floor((progress.loaded - progress.chunkLength) / 10485760)) {
-      console.log(`Downloading model: ${Math.floor(progress.loaded / 1048576)} MB`);
+    if (
+      Math.floor(progress.loaded / 10485760) !==
+      Math.floor((progress.loaded - progress.chunkLength) / 10485760)
+    ) {
+      console.log(
+        `Downloading model: ${Math.floor(progress.loaded / 1048576)} MB`,
+      );
     }
   }
 }
@@ -27,15 +36,22 @@ class GemmaBenchmark {
   }
   async init() {
     const gemma = await Gemma();
-    console.log('Downloading weights and initializing pipeline...');
-    this.model = await gemma.pipeline(weightsPath, { progress: logDownloadProgress });
+    console.log("Downloading weights and initializing pipeline...");
+    this.model = await gemma.pipeline(weightsPath, {
+      progress: logDownloadProgress,
+    });
+    console.log("Gemma pipeline initialized.");
   }
   async run() {
-    const sentence = 'Max 100 word response. Why is the sky blue?';
-    console.log('Generating...');
-    console.time('gemma-generation')
-    const result = await this.model(sentence);
-    console.timeEnd('gemma-generation')
+    console.log("Generating...");
+    console.time("gemma-generation");
+    const result = await this.model(LLM_BENCHMARK_PROMPT, {
+      max_tokens: LLM_MAX_OUTPUT_TOKENS,
+      temperature: 0,
+      top_k: 1,
+      ignore_eos: true,
+    });
+    console.timeEnd("gemma-generation");
     console.log(result);
   }
 }
@@ -45,11 +61,11 @@ const appVersion = "0.1.0";
 
 let benchmark;
 try {
-    benchmark = new GemmaBenchmark();
-    await benchmark.init();
- } catch (error) {
-    console.error(error.message);
- }
+  benchmark = new GemmaBenchmark();
+  await benchmark.init();
+} catch (error) {
+  console.error(error.message);
+}
 
 /*--------- Running test suites ---------*/
 const suites = {

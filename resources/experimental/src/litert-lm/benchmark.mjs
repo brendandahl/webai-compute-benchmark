@@ -2,10 +2,14 @@
  * Experimental LiteRT-LM benchmark using WebGPU and the Gemma model.
  */
 
-import { Engine, loadLiteRtLm } from "@litert-lm/core";
+import { Engine, loadLiteRtLm, SamplerType } from "@litert-lm/core";
 import { BenchmarkConnector } from "speedometer-utils/benchmark.mjs";
 import { createSubIteratedSuite } from "speedometer-utils/helpers.mjs";
 import { params } from "speedometer-utils/params.mjs";
+import {
+  LLM_BENCHMARK_PROMPT,
+  LLM_MAX_OUTPUT_TOKENS,
+} from "../llm-benchmark-config.mjs";
 
 const weightsPath = "../models/litert-lm/gemma-4-E2B-it-web.litertlm";
 const wasmPath = "resources/wasm/";
@@ -65,16 +69,29 @@ class LiteRtLmBenchmark {
     const modelStream = await fetchModelWithProgress(weightsPath);
     this.engine = await Engine.create({
       model: modelStream,
+      benchmarkEnabled: true,
     });
     console.log("LiteRT-LM engine initialized.");
   }
 
   async run() {
-    const sentence = "Max 100 word response. Why is the sky blue?";
     console.log("Generating...");
-    const conversation = await this.engine.createConversation();
+    console.time("litert-lm-generation");
+    const conversation = await this.engine.createConversation({
+      sessionConfig: {
+        maxOutputTokens: LLM_MAX_OUTPUT_TOKENS,
+        stopTokenIds: [],
+        samplerParams: {
+          type: SamplerType.GREEDY,
+          temperature: 0,
+          k: 1,
+          seed: 42,
+        },
+      },
+    });
     try {
-      const result = await conversation.sendMessage(sentence);
+      const result = await conversation.sendMessage(LLM_BENCHMARK_PROMPT);
+      console.timeEnd("litert-lm-generation");
       console.log(result?.content?.[0]?.text ?? result);
     } finally {
       await conversation.delete();
@@ -94,7 +111,11 @@ try {
     default: createSubIteratedSuite(benchmark, params.subIterationCount),
   };
 
-  const benchmarkConnector = new BenchmarkConnector(suites, appName, appVersion);
+  const benchmarkConnector = new BenchmarkConnector(
+    suites,
+    appName,
+    appVersion,
+  );
   benchmarkConnector.connect();
 } catch (error) {
   console.error("Failed to initialize LiteRT-LM benchmark:", error);

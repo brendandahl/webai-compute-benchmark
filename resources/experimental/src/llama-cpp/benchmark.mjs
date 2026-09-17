@@ -18,6 +18,10 @@ import { Wllama } from "@wllama/wllama/esm/index.js";
 import { BenchmarkConnector } from "speedometer-utils/benchmark.mjs";
 import { createSubIteratedSuite } from "speedometer-utils/helpers.mjs";
 import { params } from "speedometer-utils/params.mjs";
+import {
+  LLM_BENCHMARK_PROMPT,
+  LLM_MAX_OUTPUT_TOKENS,
+} from "../llm-benchmark-config.mjs";
 
 const weightsPath = "../models/llama-cpp/gemma-3-270m-it-Q8_0.gguf";
 const wasmPath = "resources/wasm/wllama.wasm";
@@ -151,6 +155,7 @@ class LlamaCppBenchmark {
       n_cache_reuse: 0,
       n_threads: maxThreads,
       n_gpu_layers: this.backend.nGpuLayers,
+      seed: 42,
     });
     const buffers = assertWeightsOnExpectedBackend(this.backend, nativeLogs);
     console.log(
@@ -169,11 +174,16 @@ class LlamaCppBenchmark {
   }
 
   async run() {
-    const sentence = "Max 100 word response. Why is the sky blue?";
     console.log("Generating...");
     console.time("llama-cpp-generation");
     const result = await this.wllama.createChatCompletion({
-      messages: [{ role: "user", content: sentence }],
+      messages: [{ role: "user", content: LLM_BENCHMARK_PROMPT }],
+      max_tokens: LLM_MAX_OUTPUT_TOKENS,
+      temperature: 0,
+      temp: 0,
+      top_k: 1,
+      seed: 42,
+      ignore_eos: true,
       cache_prompt: false,
     });
     console.timeEnd("llama-cpp-generation");
