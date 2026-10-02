@@ -28,7 +28,11 @@ const SUITES_FIXTURE = [
 ];
 
 const CLIENT_FIXTURE = {
+    willStartIteration: sinon.stub(),
+    willStartSuite: sinon.stub(),
+    didFinishSuitePrepare: sinon.stub(),
     willRunTest: sinon.stub(),
+    didFinishStep: sinon.stub(),
     didFinishSuite: sinon.stub(),
     didRunSuites: sinon.stub(),
 };
@@ -102,6 +106,23 @@ describe("BenchmarkRunner", () => {
     });
 
     describe("Suite", () => {
+        describe("_runMultipleIterations", () => {
+            let runAllSuitesStub;
+
+            before(async () => {
+                runner._iterationCount = 2;
+                runAllSuitesStub = stub(runner, "runAllSuites").callsFake(async () => null);
+                await runner._runMultipleIterations();
+            });
+
+            it("should call willStartIteration before each iteration", () => {
+                assert.calledTwice(runner._client.willStartIteration);
+                assert.calledWith(runner._client.willStartIteration, 0, 2);
+                assert.calledWith(runner._client.willStartIteration, 1, 2);
+                assert.calledTwice(runAllSuitesStub);
+            });
+        });
+
         describe("runAllSuites", () => {
             let _runSuiteStub, _finalizeStub, _loadFrameStub, _appendFrameStub, _removeFrameStub;
 
@@ -115,7 +136,7 @@ describe("BenchmarkRunner", () => {
                     spy(suite, "prepare");
                 }
                 expect(runner._suites).not.to.have.length(0);
-                await runner.runAllSuites();
+                await runner.runAllSuites(0);
             });
 
             it("should call prepare on all suites", () => {
@@ -125,6 +146,9 @@ describe("BenchmarkRunner", () => {
                     assert.calledOnce(suite.prepare);
                 }
                 expect(suitesPrepareCount).equal(SUITES_FIXTURE.length);
+                assert.calledTwice(runner._client.willStartSuite);
+                assert.calledWith(runner._client.willStartSuite, SUITES_FIXTURE[0]);
+                assert.calledWith(runner._client.willStartSuite, SUITES_FIXTURE[1]);
             });
 
             it("should run all test suites", async () => {
@@ -162,6 +186,7 @@ describe("BenchmarkRunner", () => {
                 assert.calledOnce(_prepareSuiteSpy);
                 assert.calledOnce(_suitePrepareSpy);
                 assert.calledOnce(_loadFrameStub);
+                assert.calledWith(runner._client.didFinishSuitePrepare, suite, sinon.match.number);
             });
 
             it("should run and record results for every test in suite", async () => {
@@ -173,6 +198,7 @@ describe("BenchmarkRunner", () => {
                 assert.calledWith(performanceMarkSpy, "suite-Suite 1-end");
                 expect(performanceMarkSpy.callCount).to.equal(4);
                 assert.calledOnce(runner._client.didFinishSuite);
+                assert.calledWith(runner._client.didFinishSuite, suite, runner._measuredValues.steps[suite.name]);
             });
         });
     });
@@ -193,6 +219,7 @@ describe("BenchmarkRunner", () => {
 
             it("should run client pre and post hooks if present", () => {
                 assert.calledWith(runner._client.willRunTest, suite, suite.steps[0]);
+                assert.calledWith(runner._client.didFinishStep, suite, suite.steps[0].name);
             });
 
             it("should write performance marks at the start and end of the test with the correct test name", () => {

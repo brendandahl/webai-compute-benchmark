@@ -125,9 +125,12 @@ class MainBenchmarkClient {
         frame.style.transform = "translate(-50%, -50%)";
     }
 
-    async willRunTest(suite, test) {
+    willStartSuite(suite) {
         document.getElementById("info-label").textContent = suite.name;
         document.getElementById("info-progress").textContent = `${this._finishedTestCount} / ${this.stepCount}`;
+    }
+
+    async willRunTest(suite, test) {
         if (this._steppingPromise) {
             await this._awaitNextStep(suite, test);
         }
@@ -138,7 +141,7 @@ class MainBenchmarkClient {
         this._progressCompleted.value = this._finishedTestCount;
     }
 
-    didFailSuite(suite, error) {
+    didFailSuite(suite) {
         this._failedSuites.add(suite.name);
         this._finishedTestCount++;
         this._progressCompleted.value = this._finishedTestCount;

@@ -71,12 +71,18 @@ export class SuiteRunner {
         const suitePrepareEndLabel = `suite-${suiteName}-prepare-end`;
 
         performance.mark(suitePrepareStartLabel);
-        await this._loadFrame();
-        await this.#suite.prepare(this.#page);
+        await this._loadAndPrepareFrame();
         performance.mark(suitePrepareEndLabel);
 
         const entry = performance.measure(`suite-${suiteName}-prepare`, suitePrepareStartLabel, suitePrepareEndLabel);
         this.#prepareTime = entry.duration;
+        this.#suiteResults.prepare = this.#prepareTime;
+        await this.#client?.didFinishSuitePrepare?.(this.#suite, this.#prepareTime);
+    }
+
+    async _loadAndPrepareFrame() {
+        await this._loadFrame();
+        await this.#suite.prepare(this.#page);
     }
 
     async _runSuite() {
@@ -164,20 +170,17 @@ export class SuiteRunner {
             tests: { Sync: syncTime, Async: asyncTime },
             total: total,
         };
-        this.#suiteResults.prepare = this.#prepareTime;
         this.#suiteResults.total = total;
+        await this.#client?.didFinishStep?.(this.#suite, step.name);
     };
 
     async _updateClient(suite = this.#suite) {
-        if (this.#client?.didFinishSuite) {
-            await this.#client.didFinishSuite(suite);
-        }
+        await this.#client?.didFinishSuite?.(suite, this.#suiteResults);
     }
 }
 
 export class RemoteSuiteRunner extends SuiteRunner {
     #appId;
-    #prepareTime;
 
     get appId() {
         return this.#appId;
@@ -201,32 +204,29 @@ export class RemoteSuiteRunner extends SuiteRunner {
         }
     }
 
-    async _prepareSuite() {
-        const suiteName = this.suite.name;
-        const suitePrepareStartLabel = `suite-${suiteName}-prepare-start`;
-        const suitePrepareEndLabel = `suite-${suiteName}-prepare-end`;
-
-        performance.mark(suitePrepareStartLabel);
-
+    async _loadAndPrepareFrame() {
         // Wait for the app-ready message from the workload.
         const appReadyPromise = this._subscribeOnce("app-ready");
-        await this._loadFrame(this.suite);
+        await this._loadFrame();
         const response = await appReadyPromise;
         await this.suite.prepare?.(this.page);
         // Capture appId to pass along with messages.
         this.appId = response?.appId;
-
-        performance.mark(suitePrepareEndLabel);
-
-        const entry = performance.measure(`suite-${suiteName}-prepare`, suitePrepareStartLabel, suitePrepareEndLabel);
-        this.#prepareTime = entry.duration;
     }
 
     async _runSuite() {
-        // Ask workload to run its own tests.
-        this.frame.contentWindow.postMessage({ id: this.appId, key: "benchmark-connector", type: "benchmark-suite", name: this.suite.config?.name || "default" }, "*");
-        // Capture metrics from the completed tests.
-        const response = await this._subscribeOnce("suite-complete");
+        this._startSubscription("step-complete", (e) => {
+            this.client?.didFinishStep?.(this.suite, e.data.test);
+        });
+        let response;
+        try {
+            // Ask workload to run its own tests.
+            this.frame.contentWindow.postMessage({ id: this.appId, key: "benchmark-connector", type: "benchmark-suite", name: this.suite.config?.name || "default" }, "*");
+            // Capture metrics from the completed tests.
+            response = await this._subscribeOnce("suite-complete");
+        } finally {
+            this._stopSubscription("step-complete");
+        }
         if (!Object.keys(response.result.steps).every(isValidIdentifier)) {
             throw new Error(`Invalid step names in suite ${this.suite.name}`);
         }
@@ -236,7 +236,6 @@ export class RemoteSuiteRunner extends SuiteRunner {
             ...response.result.steps,
         };
 
-        this.suiteResults.prepare = this.#prepareTime;
         this.suiteResults.total = response.result.total;
 
         this._validateSuiteResults();

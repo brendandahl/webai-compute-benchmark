@@ -367,6 +367,7 @@ export class BenchmarkRunner {
         const iterationStartLabel = "iteration-start";
         const iterationEndLabel = "iteration-end";
         for (let i = 0; i < this._iterationCount; i++) {
+            await this._client?.willStartIteration?.(i, this._iterationCount);
             performance.mark(iterationStartLabel);
             await this.runAllSuites(i);
             performance.mark(iterationEndLabel);
@@ -441,6 +442,7 @@ export class BenchmarkRunner {
                     continue;
                 }
                 try {
+                    await this._client?.willStartSuite?.(suite);
                     await this._appendFrame();
                     this._page = new Page(this._frame);
                     let cleanupErrorListeners;
@@ -467,7 +469,7 @@ export class BenchmarkRunner {
                 } catch (error) {
                     console.error(`Workload ${suite.name} failed:`, error);
                     this._measuredValues.steps[suite.name] = { total: 0 };
-                    this._client?.didFailSuite?.(suite, error);
+                    await this._client?.didFailSuite?.(suite, error);
                 } finally {
                     this._removeFrame();
                 }

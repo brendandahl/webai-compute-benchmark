@@ -3,6 +3,7 @@
 import assert from "assert";
 import testSetup from "./helper.mjs";
 import { benchmarkConfigurator } from "../resources/benchmark-configurator.mjs";
+import { defaultParams } from "../resources/shared/params.mjs";
 
 const HELP = `
 This script runs end2end tests by invoking the benchmark via the main page in /index.html.
@@ -27,7 +28,7 @@ if (RUN_FULL_SUITE) {
 }
 
 async function testPage(url) {
-    console.log(`Testing: ${url}`);
+    console.log(`\nTesting: ${url}`);
     await driver.get(`http://localhost:${PORT}/${url}`);
 
     await driver.executeAsyncScript((callback) => {
@@ -38,35 +39,104 @@ async function testPage(url) {
         }
     });
 
-    console.log("    - Awaiting Benchmark");
-    const { error, metrics } = await driver.executeAsyncScript((callback) => {
-        globalThis.addEventListener(
-            "BenchmarkDone",
-            () =>
-                callback({
-                    metrics: globalThis.benchmarkClient.metrics,
-                }),
-            { once: true }
-        );
-        // Install error handlers to report page errors back to selenium.
-        globalThis.addEventListener("error", (message, source, lineno, colno, error) =>
-            callback({
-                error: { message, source, lineno, colno, error },
-            })
-        );
-        globalThis.addEventListener("unhandledrejection", (e) => {
-            callback({
-                error: {
-                    message: e.reason.toString(),
-                    stack: e.reason?.stack,
-                },
-            });
-        });
-        globalThis.benchmarkClient.start();
-    });
+    await driver.executeScript((defaultSubIterationCount) => {
+        globalThis._e2eQueue = [];
+        globalThis._e2eWaiter = null;
+        const push = (event) => {
+            if (globalThis._e2eWaiter) {
+                globalThis._e2eWaiter([event]);
+                globalThis._e2eWaiter = null;
+            } else {
+                globalThis._e2eQueue.push(event);
+            }
+        };
 
-    if (error) {
-        throw new Error(error.message + (error?.stack ?? ""));
+        const client = globalThis.benchmarkClient;
+        const defaultSubIters = Number(new URLSearchParams(location.search).get("subIterationCount") ?? defaultSubIterationCount);
+        const getSubIters = (suite) => suite.steps?.length ?? defaultSubIters;
+        let step = 0;
+        let prepStr = "";
+        const pushLive = (suite, status = `${prepStr}running...`) => push({ live: `    ⏳ ${suite.name} [sub-iter ${step + 1}/${getSubIters(suite)}] (${status})` });
+
+        client.willStartIteration = (i, count) => push({ log: `  Iteration ${i + 1}/${count}` });
+
+        const origStartSuite = client.willStartSuite.bind(client);
+        client.willStartSuite = (suite) => {
+            origStartSuite(suite);
+            step = 0;
+            prepStr = "";
+            pushLive(suite, "preparing...");
+        };
+        client.didFinishSuitePrepare = (suite, prepare) => {
+            prepStr = `prepare: ${prepare.toFixed(1)}ms, `;
+            pushLive(suite);
+        };
+        client.didFinishStep = (suite) => {
+            if (++step < getSubIters(suite)) {
+                pushLive(suite);
+            }
+        };
+
+        const origFinishSuite = client.didFinishSuite.bind(client);
+        client.didFinishSuite = (suite, results) => {
+            origFinishSuite(suite);
+            const stepTimes = Object.values(results.steps).map((s) => `${s.total.toFixed(1)}ms`);
+            const breakdown = stepTimes.length > 1 ? ` [${stepTimes.join(", ")}]` : "";
+            const subLabel = stepTimes.length > 1 ? ` (${stepTimes.length} sub-iters)` : "";
+            push({ log: `    \x1b[32m✓\x1b[0m ${suite.name}${subLabel} (${prepStr}run: ${results.total.toFixed(1)}ms${breakdown})` });
+        };
+
+        const origFailSuite = client.didFailSuite.bind(client);
+        client.didFailSuite = (suite, err) => {
+            origFailSuite(suite);
+            const msg = err?.stack || err?.message || String(err);
+            push({ error: `Suite ${suite.name} failed: ${msg}` });
+        };
+
+        globalThis.addEventListener("BenchmarkDone", () => push({ done: client.metrics }), { once: true });
+        globalThis.addEventListener("error", (e) => push({ error: e.message + (e.error?.stack ?? "") }));
+        globalThis.addEventListener("unhandledrejection", (e) => push({ error: (e.reason?.toString?.() ?? String(e.reason)) + (e.reason?.stack ?? "") }));
+        client.start();
+    }, defaultParams.subIterationCount);
+
+    const isTTY = Boolean(process.stdout.isTTY);
+    let lastLive = "";
+    let metrics = null;
+    const println = (text) => process.stdout.write(isTTY ? `\r\x1b[2K${text}\n` : `${text}\n`);
+
+    try {
+        while (!metrics) {
+            const events = await driver.executeAsyncScript((cb) => {
+                if (globalThis._e2eQueue.length) {
+                    cb(globalThis._e2eQueue.splice(0));
+                } else {
+                    globalThis._e2eWaiter = cb;
+                }
+            });
+            for (const { live, log, error, done } of events) {
+                if (live) {
+                    lastLive = live;
+                    if (isTTY) {
+                        process.stdout.write(`\r\x1b[2K${live}`);
+                    }
+                }
+                if (log) {
+                    lastLive = "";
+                    println(log);
+                }
+                if (error) {
+                    throw new Error(error);
+                }
+                if (done) {
+                    metrics = done;
+                }
+            }
+        }
+    } catch (err) {
+        if (lastLive) {
+            println(`${lastLive.replace("⏳", "\x1b[31m✖\x1b[0m")} - failed`);
+        }
+        throw err;
     }
 
     validateMetrics(metrics);
@@ -95,7 +165,6 @@ async function testIterations() {
             const metric = metrics[suite.name];
             assert(metric, `Missing suite result for ${suite.name}`);
             assert(metric.values.length === iterationCount);
-            console.log(`Suite ${suite.name} took ${metric.sum}ms`);
         } else {
             assert(!(suite.name in metrics));
         }
